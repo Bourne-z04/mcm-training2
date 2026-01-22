@@ -260,8 +260,15 @@ mcm/training2/
 ├── data/                    # 数据文件
 │   └── soccer_field_features.csv
 ├── solve/                   # 求解脚本
-│   ├── q1.py               # 主求解程序
-│   └── optimized_trajectory.csv  # 优化轨迹输出
+│   ├── q1.py               # 主求解程序（轨迹重建）
+│   ├── optimized_trajectory.csv  # 优化轨迹输出
+│   └── q2/                 # 轨迹分类分析
+│       ├── fit.py         # 轨迹拟合主程序
+│       ├── simulate_football.py  # 基础模拟程序
+│       ├── trajectory_fitting_analysis.png  # 拟合分析图
+│       ├── trajectories.png  # 三种轨迹对比
+│       ├── trajectories_3d.png  # 3D轨迹图
+│       └── modified_fitting_comparison.png  # 对比分析图
 ├── analysis/                # 分析脚本
 │   ├── q1_analysis.py      # 灵敏度分析
 │   └── sensitivity_analysis.png  # 分析结果图
@@ -282,19 +289,139 @@ mcm/training2/
 
 #### 计算性能
 - DLT算法: 每帧<0.1秒
-- 轨迹优化: 约50-100次函数评估，每次<1秒
+- 轨迹重建优化: 约50-100次函数评估，每次<1秒
+- 轨迹分类拟合: 3个模型，各约200次迭代，每次<0.5秒
 - 灵敏度分析: 9×21×2=378次模拟，约5分钟
+- 总分析时间: 约10分钟
 
 ### 11. 结论
 
-通过单目视觉几何和足球动力学建模成功重建了罗纳尔多经典任意球轨迹。程序实现了从视频帧数据到三维轨迹的完整求解流程，包括：
+本项目成功完成了罗纳尔多经典任意球的轨迹重建和分类分析，建立了完整的任意球分析框架：
 
+#### Problem A: 轨迹重建
+通过单目视觉几何和足球动力学建模成功重建了三维轨迹：
 1. **视觉几何重建**: 使用DLT算法从2D像素坐标计算相机参数和视线射线
 2. **轨迹优化**: 通过L-BFGS-B算法最小化观测误差，获得最优物理参数
 3. **结果验证**: 优化收敛良好，最终误差0.783，轨迹成功穿过球门区域
 
-该方法为任意球轨迹分析提供了有效的计算框架，为后续的防守策略研究奠定了基础。
+#### Problem B: 轨迹分类
+对重建轨迹进行三种模型的拟合分析：
+1. **模型比较**: 电梯球模型取得最佳拟合（MSE=3.3881）
+2. **轨迹分类**: 确认罗纳尔多任意球属于电梯球类型
+3. **参数特征**: 低旋转（15.0 rad/s）、高速初速度（30.83 m/s）
+
+该分析框架为任意球战术研究提供了科学工具，为教练员制定防守策略提供了数据支持。
 
 ---
 
+## Problem B: Trajectory Classification and Dynamic Modeling
+
+基于重建的罗纳尔多任意球轨迹数据，对三种典型任意球轨迹模型进行拟合分析：香蕉球（侧旋）、落叶球（上旋）和电梯球（高速低旋）。
+
+### 1. 轨迹拟合分析框架
+
+#### 数据基础
+- 输入轨迹：120个数据点（从q1优化结果获得）
+- 空间范围：X: 31.22m → 55.61m, Y: -2.25m → -3.07m, Z: 0.00m → 1.13m
+- 时间范围：0.00s → 1.00s
+
+#### 物理模型参数
+- 足球质量: 0.436 kg (FIFA标准)
+- 半径: 0.110 m
+- 空气密度: 1.225 kg/m³ (15°C)
+- 重力加速度: 9.81 m/s²
+- 马格努斯力系数: C_M = 0.2
+- 旋转衰减系数: k = 0.05-0.07 s⁻¹
+
+#### 动力学方程
+```python
+# 阻力系数模型（基于雷诺数）
+def get_drag_coefficient(v_magnitude, model_type):
+    Re = rho * v_magnitude * 2 * r / mu
+    if model_type == 'Elevator':
+        # 电梯球：时变阻力（层流到湍流过渡）
+        Cd_min, Cd_max = 0.1, 0.5
+        Re_crit, width = 1e5, 0.5e5
+        transition = 1 / (1 + np.exp((Re - Re_crit) / width))
+        return Cd_min + (Cd_max - Cd_min) * transition
+    else:
+        # 标准阻力
+        return 0.5 if Re < 1e5 else 0.25
+
+# 马格努斯力（包含旋转衰减）
+F_magnus = beta * cross(omega_decay, v_vec)
+omega_decay = omega0 * exp(-k * t)
+```
+
+### 2. 三种轨迹模型
+
+#### 香蕉球模型（Banana - 侧旋）
+- **旋转类型**: ω = [0, 0, ω_z] (侧旋)
+- **参数范围**: ω_z ∈ [100, 200] rad/s, v₀ ∈ [25, 35] m/s
+- **拟合结果**: v₀ = 35.00 m/s, ω = 149.9 rad/s, 发射角 = 14.3°
+- **MSE损失**: 4.4452
+- **轨迹特征**: 侧向弯曲，适合攻门时制造角度
+
+#### 落叶球模型（Leaf - 上旋）
+- **旋转类型**: ω = [ω_x, 0, 0] (顶旋)
+- **参数范围**: ω_x ∈ [50, 120] rad/s, v₀ ∈ [20, 32] m/s
+- **拟合结果**: v₀ = 32.00 m/s, ω = 80.1 rad/s, 发射角 = 16.7°
+- **MSE损失**: 14.2171
+- **轨迹特征**: 后期急坠，适合远距离射门
+
+#### 电梯球模型（Elevator - 低旋）
+- **旋转类型**: ω = [ω_x, 0, 0] (低顶旋)
+- **参数范围**: ω_x ∈ [5, 25] rad/s, v₀ ∈ [28, 38] m/s
+- **拟合结果**: v₀ = 30.83 m/s, ω = 15.0 rad/s, 发射角 = 14.6°
+- **MSE损失**: 3.3881 ⭐ **最佳拟合**
+- **轨迹特征**: 前平后坠，时变阻力导致突然下落
+
+### 3. 优化结果分析
+
+#### 模型比较
+```
+Model Ranking (by fitting quality):
+1. Elevator: MSE = 3.3881 ⭐
+2. Banana:  MSE = 4.4452
+3. Leaf:    MSE = 14.2171
+```
+
+#### 轨迹特征
+- **最佳模型**: 电梯球（Elevator）
+- **飞行时间**: 1.00秒
+- **最大高度**: 2.6米
+- **最终位置**: (56.5m, -4.3m, 2.1m)
+
+#### 罗纳尔多任意球分类
+基于最小MSE准则，罗纳尔多的经典任意球属于**电梯球（Elevator Ball）**类型：
+- 低旋转速度（15.0 rad/s vs 典型电梯球的5-25 rad/s）
+- 高速初速度（30.83 m/s）
+- 时变阻力特性导致的突然下坠轨迹
+- 符合电梯球"前平后坠"的典型特征
+
+### 4. 数值模拟实现
+
+#### 算法流程
+1. **参数优化**: 使用L-BFGS-B算法最小化加权MSE损失
+2. **ODE求解**: RK45方法求解6维状态空间方程
+3. **损失函数**: 加权误差（X:2.0, Y:1.0, Z:3.0），强调进球方向和高度精度
+
+#### 代码实现
+```python
+def objective(params, model_type):
+    v0, theta, phi, omega = params
+    # 球坐标到笛卡尔坐标转换
+    vx = v0 * cos(phi) * cos(theta)
+    vy = v0 * cos(phi) * sin(theta)
+    vz = v0 * sin(phi)
+
+    # ODE求解
+    sol = solve_ivp(ball_dynamics, [0, T], state0,
+                   args=(model_type, [omega]), t_eval=t_data)
+
+    # 加权MSE损失
+    weights = np.array([2.0, 1.0, 3.0])  # X, Y, Z权重
+    errors = sol.y[:3] - observed_data.T
+    return np.mean(np.sum((errors * weights[:, np.newaxis])**2, axis=0))
+```
 
